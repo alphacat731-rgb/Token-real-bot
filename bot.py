@@ -7,23 +7,24 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
 from messages import messages, moods
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing.")
 
-if OPENAI_API_KEY:
-    ai = OpenAI(api_key=OPENAI_API_KEY)
+if GEMINI_API_KEY:
+    gemini = genai.Client(api_key=GEMINI_API_KEY)
 else:
-    ai = None
+    gemini = None
 
 TOKEN_PERSONALITY = """
 You are Token, a chaotic cat-like mascot inspired by the aesthetic of Femtanyl.
@@ -56,11 +57,11 @@ def fallback_message() -> str:
 
 
 async def generate_token_reply(channel_id: int, username: str, user_text: str) -> str:
-    """Generate an AI reply, falling back to a local Token message if needed."""
+    """Generate a Gemini reply, falling back to a local Token message if needed."""
     history = conversation_history[channel_id]
     history.append({"role": "user", "content": f"{username}: {user_text}"})
 
-    if ai is None:
+    if gemini is None:
         reply = fallback_message()
         history.append({"role": "assistant", "content": reply})
         return reply
@@ -74,23 +75,28 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
 
     try:
         response = await asyncio.to_thread(
-            ai.responses.create,
-            model=OPENAI_MODEL,
-            instructions=TOKEN_PERSONALITY,
-            input=prompt,
-            max_output_tokens=180,
+            gemini.models.generate_content,
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=TOKEN_PERSONALITY,
+                max_output_tokens=180,
+                temperature=1.0,
+            ),
         )
-        reply = response.output_text.strip()
+
+        reply = (response.text or "").strip()
 
         if not reply:
-            raise RuntimeError("AI returned an empty response.")
+            raise RuntimeError("Gemini returned an empty response.")
 
+        # Discord message content is limited, so cap unusually long output.
         reply = reply[:1900]
         history.append({"role": "assistant", "content": reply})
         return reply
 
     except Exception as exc:
-        print(f"AI error: {exc}")
+        print(f"Gemini error: {exc}")
         reply = fallback_message()
         history.append({"role": "assistant", "content": reply})
         return reply
@@ -121,8 +127,9 @@ async def on_ready() -> None:
     print("=" * 46)
     print(f"Account: {bot.user}")
     print(f"Guilds: {len(bot.guilds)}")
-    print(f"AI: {'ONLINE' if ai else 'OFFLINE (local fallback)'}")
-    print(f"Model: {OPENAI_MODEL if ai else 'local'}")
+    print(f"AI: {'ONLINE' if gemini else 'OFFLINE (local fallback)'}")
+    print(f"Model: {GEMINI_MODEL if gemini else 'local'}")
+    print("Provider: Gemini")
     print("Ears: ONLINE")
     print("Paws: ONLINE")
     print("Chaos: MAXIMUM")

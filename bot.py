@@ -47,13 +47,8 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Recent context per channel. It is deliberately small so the bot does not
-# accumulate an unlimited amount of conversation history.
 conversation_history = defaultdict(lambda: deque(maxlen=12))
-
-# Prevent one channel from generating endless AI requests.
 channel_locks = defaultdict(asyncio.Lock)
-last_random_channel = {}
 
 
 def fallback_message() -> str:
@@ -90,8 +85,6 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
         if not reply:
             raise RuntimeError("AI returned an empty response.")
 
-        # Discord messages have a content limit, so keep unusually long model
-        # output from turning into an error.
         reply = reply[:1900]
         history.append({"role": "assistant", "content": reply})
         return reply
@@ -104,7 +97,6 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
 
 
 async def type_and_send(message: discord.Message, text: str) -> None:
-    # Tiny simulated typing delay. It is capped so the bot stays responsive.
     delay = min(max(len(text) * 0.02, 0.35), 2.25)
     async with message.channel.typing():
         await asyncio.sleep(delay)
@@ -149,7 +141,6 @@ async def on_message(message: discord.Message) -> None:
     mentioned = bot.user is not None and bot.user in message.mentions
     is_dm = isinstance(message.channel, discord.DMChannel)
 
-    # Token only actively joins conversations when directly mentioned or DMed.
     if not (mentioned or is_dm):
         await bot.process_commands(message)
         return
@@ -198,7 +189,8 @@ async def token_mood(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="token_forget", description="Clear Token's recent conversation for this channel.")
 async def token_forget(interaction: discord.Interaction) -> None:
-    conversation_history[interaction.channel_id or interaction.user.id].clear()
+    key = interaction.channel_id or interaction.user.id
+    conversation_history[key].clear()
     await interaction.response.send_message("memory flushed. meow.dll rebooted.")
 
 
@@ -207,7 +199,6 @@ async def random_token_events() -> None:
     await bot.wait_until_ready()
 
     while not bot.is_closed():
-        # Random idle event every 20–60 minutes.
         await asyncio.sleep(random.randint(1200, 3600))
 
         eligible = []
@@ -225,7 +216,6 @@ async def random_token_events() -> None:
 
         try:
             await channel.send(chosen)
-            last_random_channel[guild.id] = channel.id if channel.guild else None
         except discord.HTTPException as exc:
             print(f"Random Token event failed: {exc}")
 

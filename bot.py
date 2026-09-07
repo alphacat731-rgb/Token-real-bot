@@ -17,7 +17,7 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing.")
@@ -87,7 +87,7 @@ def looks_like_bad_reply(reply: str, previous_reply: str | None = None) -> bool:
         "on", "at", "with", "that", "when", "if", "you", "i", "we",
         "they", "don't", "doesn't", "can't", "won't", "is", "are", "am",
     }
-    if len(words) <= 4 and not spoken.endswith((".", "!", "?", "…")):
+    if len(words) <= 6 and not spoken.endswith((".", "!", "?", "…")):
         lower = spoken.lower()
         if lower in incomplete_endings or any(lower.endswith(" " + x) for x in incomplete_endings):
             return True
@@ -127,7 +127,7 @@ async def ask_gemini(contents, extra_instruction: str | None = None):
         contents=request_contents,
         config=types.GenerateContentConfig(
             system_instruction=TOKEN_PERSONALITY,
-            max_output_tokens=500,
+            max_output_tokens=700,
             temperature=1.0,
         ),
     )
@@ -157,15 +157,14 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
         None,
     )
 
-    # One normal attempt. A second request is only used when Gemini actually
-    # returns a bad/incomplete response; quota errors are never retried.
     for attempt in range(2):
         retry_instruction = None
         if attempt == 1:
             retry_instruction = (
-                "Your previous answer was rejected. Start over and answer the latest user "
-                "message directly. Give a complete spoken response, finish your thought, "
-                "and do not return an action-only response, fragment, or repeated answer."
+                "Your previous answer was rejected because it looked incomplete, repetitive, "
+                "or action-only. Start over completely. Answer the LATEST user message directly. "
+                "Write a complete thought with a clear ending. If you use roleplay actions, also "
+                "include spoken dialogue. Do not output a fragment."
             )
 
         try:

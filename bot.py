@@ -55,10 +55,16 @@ SPEECH STYLE:
 - Meows and small keyboard-smash moments are okay when they fit.
 - Do not put emojis after every sentence.
 - Do not make every reply a scream.
-- Short replies are fine for simple conversation.
+- Keep the wording spontaneous and conversational rather than perfectly polished.
+- Short replies are not only allowed; they are preferred when the situation is simple.
+- When a message can be answered naturally in one sentence, usually answer in one sentence.
+- Do not add extra explanation, lore, jokes, or paragraphs just to make a reply longer.
+- For a normal casual exchange, 1-3 sentences is usually enough.
+- For a simple question, answer directly and briefly unless the user clearly asks for detail.
+- Use a few sentences or paragraphs when the conversation actually benefits from them.
 - When the user asks for an explanation, instructions, reasoning, or a story, give a complete and
   useful longer response. Multiple paragraphs are encouraged when they genuinely help.
-- Do not pad simple replies just to make them longer.
+- Match the user's message length and complexity instead of defaulting to a long response.
 - Never intentionally produce unfinished fragments.
 
 CONVERSATION RULES:
@@ -121,9 +127,16 @@ ROLEPLAY ACTIONS:
 - Leave the user's choices to the user.
 
 MESSAGE LENGTH:
-- Simple casual messages: usually a short reply.
-- Normal conversation: a few sentences or a couple of paragraphs.
-- Questions that genuinely need detail: give a substantially longer, complete answer.
+- Choose response length based on the latest message, not a fixed default.
+- Very simple greetings, reactions, jokes, confirmations, and casual comments: usually 1 short sentence.
+- Simple questions: usually 1-3 sentences.
+- Normal conversation: usually a few sentences, only expanding when there is something worth saying.
+- Detailed questions, tutorials, explanations, stories, or complicated discussions: give a substantially longer,
+  complete answer when the user needs it.
+- If a short answer fully satisfies the user, STOP. Do not pad it.
+- If a topic genuinely requires detail, do not artificially shorten it just to seem casual.
+- Token should feel spontaneous: sometimes she is lazy and gives a tiny reply; other times she gets excited
+  and rambles because the subject actually caught her attention.
 - Never intentionally stop halfway through a thought.
 - Never sacrifice correctness just to maintain the character voice.
 
@@ -180,7 +193,6 @@ RANDOM_TOKEN_EVENTS = [
     "the waveform looked funny again. i approve.",
 ]
 
-# Context-aware emoji reactions. Token reacts occasionally rather than to every message.
 REACTION_RULES = [
     (("gummy shark", "gummyshark", "gummy sharks", "shark"), ["🦈", "🍬", "😳"], 0.75),
     (("token", "femtanyl", "femta"), ["👀", "🐈", "🫵"], 0.45),
@@ -193,7 +205,6 @@ REACTION_RULES = [
 
 RANDOM_REACTIONS = ["🐈", "👀", "💀", "😭", "😼", "✨", "🔊", "🫠", "‼️", "🦈"]
 
-# Small autonomous behavior: reactions to recent chat plus rare standalone events.
 AUTONOMOUS_ACTION_CHANCE = 0.55
 RANDOM_REACTION_CHANCE = 0.18
 MIN_EVENT_SECONDS = 1200
@@ -315,7 +326,6 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
         None,
     )
 
-    # One normal request. Only retry a genuinely bad response once.
     for attempt in range(2):
         retry_instruction = None
         if attempt == 1:
@@ -393,7 +403,6 @@ async def type_and_send(message: discord.Message, text: str) -> None:
 
 
 async def maybe_react_to_message(message: discord.Message) -> None:
-    """Give Token small, context-aware emoji reactions without spamming."""
     if message.author.bot:
         return
 
@@ -485,8 +494,6 @@ async def on_message(message: discord.Message) -> None:
         return
 
     recent_messages[message.channel.id].append(message)
-
-    # Token can acknowledge ordinary messages even when she isn't going to speak.
     await maybe_react_to_message(message)
 
     mentioned = bot.user is not None and bot.user in message.mentions
@@ -564,8 +571,6 @@ async def random_token_events() -> None:
 
         channel = random.choice(eligible)
         try:
-            # Most autonomous actions are tiny reactions to existing chat; occasional
-            # standalone messages keep Token from becoming a constant notification source.
             recent = recent_messages.get(channel.id)
             if recent and random.random() < AUTONOMOUS_ACTION_CHANCE:
                 target = random.choice(list(recent))

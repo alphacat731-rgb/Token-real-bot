@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import os
 import random
@@ -21,6 +22,7 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 MEMORY_DB = os.getenv("TOKEN_MEMORY_DB", "token_memory.db")
@@ -194,24 +196,11 @@ MAX_ATTACHMENT_HASH_BYTES = 8 * 1024 * 1024
 
 intents = discord.Intents.default()
 intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents
-)
-
-conversation_history = defaultdict(
-    lambda: deque(maxlen=40)
-)
-
-recent_messages = defaultdict(
-    lambda: deque(maxlen=60)
-)
-
-channel_locks = defaultdict(
-    asyncio.Lock
-)
-
+conversation_history = defaultdict(lambda: deque(maxlen=40))
+recent_messages = defaultdict(lambda: deque(maxlen=60))
+channel_locks = defaultdict(asyncio.Lock)
 startup_message_sent = False
 quota_notice_sent = set()
 
@@ -227,7 +216,7 @@ def strip_unicode_emojis(text):
     return re.sub(
         r"[\U0001F1E6-\U0001F1FF\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F\u200D\U0001F3FB-\U0001F3FF]+",
         "",
-        text
+        text,
     ).strip()
 
 
@@ -237,99 +226,47 @@ def response_style_instruction(user_text):
     words = text.split()
 
     detailed = (
-        "explain",
-        "how does",
-        "how do",
-        "why",
-        "tutorial",
-        "steps",
-        "step by step",
-        "compare",
-        "difference",
-        "walk me through",
-        "help me",
-        "code",
-        "programming",
-        "configure",
-        "install",
-        "setup",
-        "tell me about",
-        "in detail",
-        "detailed",
-        "how can i",
-        "can you show me"
+        "explain", "how does", "how do", "why", "tutorial", "steps",
+        "step by step", "compare", "difference", "walk me through",
+        "help me", "code", "programming", "configure", "install",
+        "setup", "tell me about", "in detail", "detailed",
+        "how can i", "can you show me"
     )
 
     tiny = {
-        "hi",
-        "hey",
-        "hello",
-        "yo",
-        "sup",
-        "lol",
-        "lmao",
-        "ok",
-        "okay",
-        "nah",
-        "yeah",
-        "yes",
-        "no",
-        "what",
-        "huh",
-        "damn",
-        "bro",
-        "wait"
+        "hi", "hey", "hello", "yo", "sup", "lol", "lmao", "ok",
+        "okay", "nah", "yeah", "yes", "no", "what", "huh",
+        "damn", "bro", "wait"
     }
+
+    alpha_chars = sum(c.isalpha() for c in text)
 
     excited = (
         text.count("!") >= 2
         or text.count("?") >= 2
-        or sum(
-            c.isupper()
-            for c in text
-            if c.isalpha()
-        ) >= max(
-            6,
-            int(
-                sum(
-                    c.isalpha()
-                    for c in text
-                ) * 0.55
-            )
+        or (
+            sum(c.isupper() for c in text if c.isalpha())
+            >= max(6, int(alpha_chars * 0.55))
         )
     )
 
-    if (
-        lowered in tiny
-        or (
-            len(words) <= 3
-            and len(text) <= 24
-            and not any(
-                x in lowered
-                for x in detailed
-            )
-        )
+    if lowered in tiny or (
+        len(words) <= 3
+        and len(text) <= 24
+        and not any(x in lowered for x in detailed)
     ):
-        return (
-            "RESPONSE SHAPE: Tiny casual Discord reply. "
-            "Often one short line. Do not add filler."
-        )
+        return "RESPONSE SHAPE: Tiny casual Discord reply. Often one short line. Do not add filler."
 
-    if any(
-        x in lowered
-        for x in detailed
-    ):
+    if any(x in lowered for x in detailed):
         return (
             "RESPONSE SHAPE: The user wants real detail. "
-            "Give enough information to solve the request, "
-            "but do not pad it."
+            "Give enough information to solve the request, but do not pad it."
         )
 
     if excited:
         return (
-            "RESPONSE SHAPE: The user's energy is high. "
-            "Mirror it with Token's voice and use CAPS when "
-            "it feels natural, but do not make the reply long automatically."
+            "RESPONSE SHAPE: The user's energy is high. Mirror it with Token's voice "
+            "and use CAPS when it feels natural, but do not make the reply long automatically."
         )
 
     if len(text) <= 80:
@@ -376,12 +313,12 @@ def remember_in_memory(
     user_id,
     username,
     role,
-    content
+    content,
 ):
     conversation_history[channel_id].append(
         {
             "role": role,
-            "content": content
+            "content": content,
         }
     )
 
@@ -390,7 +327,7 @@ def remember_in_memory(
         user_id,
         username,
         role,
-        content
+        content,
     )
 
 
@@ -399,7 +336,7 @@ def load_channel_memory(channel_id):
         conversation_history[channel_id].extend(
             memory.load_history(
                 channel_id,
-                limit=40
+                limit=40,
             )
         )
 
@@ -411,7 +348,7 @@ async def build_attachment_context(
     user_id,
     username,
     attachments,
-    include_visuals=False
+    include_visuals=False,
 ):
     if not attachments:
         return "", []
@@ -420,11 +357,7 @@ async def build_attachment_context(
     visual_parts = []
 
     for attachment in attachments:
-        content_type = (
-            attachment.content_type
-            or "application/octet-stream"
-        )
-
+        content_type = attachment.content_type or "unknown"
         size = attachment.size or 0
         label = attachment.filename or "unnamed attachment"
 
@@ -434,13 +367,11 @@ async def build_attachment_context(
         if size <= MAX_ATTACHMENT_HASH_BYTES:
             try:
                 data = await attachment.read()
-                digest = hashlib.sha256(
-                    data
-                ).hexdigest()
+                digest = hashlib.sha256(data).hexdigest()
 
             except Exception as exc:
                 print(
-                    f"Attachment read/hash failed: {exc}"
+                    f"Attachment read/hash failed for {label}: {exc}"
                 )
 
         seen = memory.remember_attachment(
@@ -449,7 +380,7 @@ async def build_attachment_context(
             label,
             content_type,
             size,
-            digest
+            digest,
         )
 
         if seen:
@@ -463,9 +394,7 @@ async def build_attachment_context(
                 f"({content_type}, {size} bytes)."
             )
 
-        # VISION FIX:
-        # Pass the actual downloaded image bytes to Gemini.
-        # Do not rely on the filename or attachment URL alone.
+        # Keep the raw attachment bytes for both vision providers.
         if (
             include_visuals
             and data
@@ -473,21 +402,21 @@ async def build_attachment_context(
         ):
             try:
                 visual_parts.append(
-                    types.Part.from_bytes(
-                        data=data,
-                        mime_type=content_type
-                    )
+                    {
+                        "data": data,
+                        "mime_type": content_type,
+                        "filename": label,
+                    }
                 )
-
             except Exception as exc:
                 print(
-                    f"Gemini visual part failed for {label}: {exc}"
+                    f"Visual attachment preparation failed for {label}: {exc}"
                 )
 
     if visual_parts:
         lines.append(
-            "VISUAL INPUT: Actual image bytes are attached "
-            "to the Gemini request. Inspect the actual visual content."
+            "VISUAL INPUT: Actual image/GIF bytes are available "
+            "for a vision-capable provider."
         )
 
     return "\n".join(lines), visual_parts
@@ -495,7 +424,9 @@ async def build_attachment_context(
 
 def build_groq_messages(
     history,
-    extra_instruction=None
+    extra_instruction=None,
+    image_parts=None,
+    vision=False
 ):
     result = [
         {
@@ -516,13 +447,52 @@ def build_groq_messages(
         for x in history
     )
 
-    if extra_instruction:
-        result.append(
-            {
-                "role": "user",
-                "content": extra_instruction
-            }
-        )
+    if extra_instruction or image_parts:
+        current_parts = []
+
+        if extra_instruction:
+            current_parts.append(
+                {
+                    "type": "text",
+                    "text": extra_instruction
+                }
+            )
+
+        # Groq vision format:
+        # text + image_url containing a data URL.
+        if vision and image_parts:
+            for item in image_parts:
+                encoded = base64.b64encode(
+                    item["data"]
+                ).decode("ascii")
+
+                data_url = (
+                    f"data:{item['mime_type']};base64,{encoded}"
+                )
+
+                current_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": data_url
+                        }
+                    }
+                )
+
+            result.append(
+                {
+                    "role": "user",
+                    "content": current_parts
+                }
+            )
+
+        elif extra_instruction:
+            result.append(
+                {
+                    "role": "user",
+                    "content": extra_instruction
+                }
+            )
 
     return result
 
@@ -532,19 +502,8 @@ def build_gemini_contents(
     extra_instruction=None,
     image_parts=None
 ):
-    """
-    Build Gemini conversation contents.
-
-    IMPORTANT:
-    The current image is attached directly to the current user turn.
-    This avoids Gemini receiving only a textual placeholder/history entry.
-    """
-
     contents = []
     image_parts = image_parts or []
-
-    # The latest item in history is the current user message because
-    # generate_token_reply() stores the current user message first.
     attached_to_current_user = False
 
     for index, item in enumerate(history):
@@ -563,9 +522,13 @@ def build_gemini_contents(
             is_current_user
             and image_parts
         ):
-            parts.extend(
-                image_parts
-            )
+            for item_part in image_parts:
+                parts.append(
+                    types.Part.from_bytes(
+                        data=item_part["data"],
+                        mime_type=item_part["mime_type"]
+                    )
+                )
 
             attached_to_current_user = True
 
@@ -580,14 +543,17 @@ def build_gemini_contents(
             )
         )
 
-    # Defensive fallback:
-    # If for some reason history was empty or didn't end on a user turn,
-    # still send the image as part of a fresh user content item.
     if image_parts and not attached_to_current_user:
         contents.append(
             types.Content(
                 role="user",
-                parts=image_parts
+                parts=[
+                    types.Part.from_bytes(
+                        data=item["data"],
+                        mime_type=item["mime_type"]
+                    )
+                    for item in image_parts
+                ]
             )
         )
 
@@ -611,13 +577,27 @@ async def ask_groq(
     extra_instruction=None,
     image_parts=None
 ):
+    has_images = bool(image_parts)
+
+    model = (
+        GROQ_VISION_MODEL
+        if has_images
+        else GROQ_MODEL
+    )
+
     return await groq.chat.completions.create(
-        model=GROQ_MODEL,
+        model=model,
         messages=build_groq_messages(
             history,
-            extra_instruction
+            extra_instruction,
+            image_parts=image_parts,
+            vision=has_images
         ),
-        reasoning_effort="low",
+        reasoning_effort=(
+            "none"
+            if has_images
+            else "low"
+        ),
         max_completion_tokens=700,
         temperature=0.95
     )
@@ -641,8 +621,8 @@ async def ask_gemini(
             max_output_tokens=700,
             thinking_config=types.ThinkingConfig(
                 thinking_level="low"
-            )
-        )
+            ),
+        ),
     )
 
 
@@ -660,7 +640,7 @@ def is_quota_error(exc):
             "tokens per minute",
             "requests per day",
             "resource_exhausted",
-            "resource exhausted"
+            "resource exhausted",
         )
     )
 
@@ -669,9 +649,7 @@ def mark_quota_notice(channel_id):
     if channel_id in quota_notice_sent:
         return False
 
-    quota_notice_sent.add(
-        channel_id
-    )
+    quota_notice_sent.add(channel_id)
 
     return True
 
@@ -787,10 +765,7 @@ def looks_like_bad_reply(
         spoken
     ).strip()
 
-    if (
-        action_blocks
-        and not spoken
-    ):
+    if action_blocks and not spoken:
         return True
 
     if not re.search(
@@ -945,44 +920,47 @@ async def generate_token_reply(
         f"{response_style_instruction(user_text)}"
     )
 
+    # Vision: Groq Qwen first, Gemini fallback.
+    # Text: existing Groq primary, Gemini fallback.
     providers = []
 
-    # IMAGE REQUESTS:
-    # Gemini is the vision-capable provider and goes first.
-    if (
-        image_parts
-        and gemini is not None
-    ):
-        providers.append(
-            (
-                "Gemini",
-                ask_gemini,
-                gemini_reply_text
+    if image_parts:
+        if groq is not None:
+            providers.append(
+                (
+                    "Groq Vision",
+                    ask_groq,
+                    groq_reply_text
+                )
             )
-        )
 
-    # Normal text requests still use Groq first.
-    if (
-        not image_parts
-        and groq is not None
-    ):
-        providers.append(
-            (
-                "Groq",
-                ask_groq,
-                groq_reply_text
+        if gemini is not None:
+            providers.append(
+                (
+                    "Gemini Vision",
+                    ask_gemini,
+                    gemini_reply_text
+                )
             )
-        )
 
-    # Gemini remains a normal text fallback.
-    if gemini is not None:
-        providers.append(
-            (
-                "Gemini",
-                ask_gemini,
-                gemini_reply_text
+    else:
+        if groq is not None:
+            providers.append(
+                (
+                    "Groq",
+                    ask_groq,
+                    groq_reply_text
+                )
             )
-        )
+
+        if gemini is not None:
+            providers.append(
+                (
+                    "Gemini",
+                    ask_gemini,
+                    gemini_reply_text
+                )
+            )
 
     for (
         provider_name,
@@ -1049,10 +1027,9 @@ async def generate_token_reply(
                     reply
                 )
 
-                if provider_name != "Groq":
-                    print(
-                        f"Token AI provider: {provider_name}"
-                    )
+                print(
+                    f"Token AI provider: {provider_name}"
+                )
 
                 return reply
 
@@ -1060,7 +1037,7 @@ async def generate_token_reply(
                 if is_quota_error(exc):
                     print(
                         f"{provider_name} quota/rate limit reached; "
-                        f"switching provider."
+                        f"trying next provider."
                     )
                     break
 
@@ -1074,15 +1051,21 @@ async def generate_token_reply(
                         0.6
                     )
 
-    reply = (
-        random.choice(
-            QUOTA_MESSAGES
+    if image_parts:
+        reply = (
+            "my vision circuits just got unplugged. "
+            "i can't actually inspect that image right now."
         )
-        if mark_quota_notice(
-            channel_id
+    else:
+        reply = (
+            random.choice(
+                QUOTA_MESSAGES
+            )
+            if mark_quota_notice(
+                channel_id
+            )
+            else fallback_message()
         )
-        else fallback_message()
-    )
 
     remember_in_memory(
         channel_id,
@@ -1299,12 +1282,23 @@ async def on_ready():
     )
 
     print(
+        f"Vision: "
+        f"{GROQ_VISION_MODEL if groq else 'disabled'}"
+    )
+
+    print(
         f"Fallback: "
         f"{GEMINI_MODEL if gemini else 'disabled'}"
     )
 
     print(
-        "Providers: Groq -> Gemini -> local"
+        "Providers: "
+        "Groq -> Gemini"
+    )
+
+    print(
+        "Vision routing: "
+        "Groq Qwen -> Gemini"
     )
 
     print(
@@ -1321,7 +1315,7 @@ async def on_ready():
 
     print(
         "Vision: "
-        f"{'ONLINE' if gemini else 'OFFLINE'}"
+        f"{'ONLINE' if (groq or gemini) else 'OFFLINE'}"
     )
 
     print(
@@ -1420,8 +1414,6 @@ async def on_message(message):
         == "token (right)"
     )
 
-    # IMPORTANT:
-    # Only messages that Token will actually answer need visual processing.
     needs_visual = (
         bool(message.attachments)
         and (
@@ -1441,10 +1433,8 @@ async def on_message(message):
         )
     )
 
-    # Special Token (Right) interaction.
     if token_right:
 
-        # Their image is ALWAYS processed as visual input.
         if image_parts:
             memory.mark_fan_art_received(
                 message.author.id
@@ -1472,11 +1462,10 @@ async def on_message(message):
 
             return
 
-        # 15% chance to randomly demand fan art.
         if random.random() < 0.15:
             await message.channel.send(
                 f"<@{message.author.id}> "
-                f"HEY. WHERE'S MY FAN ART"
+                "HEY. WHERE'S MY FAN ART"
             )
 
             await bot.process_commands(
@@ -1492,7 +1481,6 @@ async def on_message(message):
         await bot.process_commands(
             message
         )
-
         return
 
     clean_text = content
@@ -1700,5 +1688,7 @@ async def random_token_events():
                 f"Random Token event failed: {exc}"
             )
 
+
+bot.run(DISCORD_TOKEN)
 
 bot.run(DISCORD_TOKEN)

@@ -8,21 +8,20 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from groq import AsyncGroq
 
 from messages import messages, moods
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing.")
 
-gemini = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+groq = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 TOKEN_PERSONALITY = """
 You are Token, the strange cat-like mascot associated with Femtanyl.
@@ -174,12 +173,12 @@ STARTUP_MESSAGES = [
 ]
 
 QUOTA_MESSAGES = [
-    "i'd respond to that but i'm too lazy to type right now. ask me again after the reset.",
+    "i'd respond to that but i'm too lazy to type right now. ask me again later.",
     "my brain is working but my paws refuse to type. i'm out of AI juice.",
-    "GEMINI IS TIRED. TOKEN IS ALSO TIRED. EVERYONE GO HOME.",
-    "too lazy to think right now. i'll be useful again after the reset.",
+    "GROQ IS TIRED. TOKEN IS ALSO TIRED. EVERYONE GO HOME.",
+    "too lazy to think right now. i'll be useful again later.",
     "my AI privileges have been revoked. i'm going to sit on the keyboard instead.",
-    "my brain has temporarily entered low-power cat mode. try me again after the reset.",
+    "my brain has temporarily entered low-power cat mode. try me again later.",
 ]
 
 RANDOM_TOKEN_EVENTS = [
@@ -230,7 +229,6 @@ def looks_like_bad_reply(reply: str, previous_reply: str | None = None) -> bool:
 
     if not cleaned or len(cleaned) < 3:
         return True
-
     if cleaned in {"*", "**", "...", "…", "-", "_"}:
         return True
 
@@ -239,7 +237,6 @@ def looks_like_bad_reply(reply: str, previous_reply: str | None = None) -> bool:
     spoken = re.sub(r"[_~`]+", "", spoken).strip()
     if action_blocks and not spoken:
         return True
-
     if not re.search(r"[A-Za-z0-9À-ÿ]", spoken):
         return True
 
@@ -256,51 +253,37 @@ def looks_like_bad_reply(reply: str, previous_reply: str | None = None) -> bool:
 
     if previous_reply and cleaned.casefold() == previous_reply.strip().casefold():
         return True
-
     return False
 
 
-def build_contents(history) -> list[types.Content]:
-    contents = []
+def build_groq_messages(history, extra_instruction=None):
+    result = [{"role": "system", "content": TOKEN_PERSONALITY}]
     for item in history:
-        role = "model" if item["role"] == "assistant" else "user"
-        contents.append(
-            types.Content(
-                role=role,
-                parts=[types.Part(text=item["content"])],
-            )
-        )
-    return contents
-
-
-async def ask_gemini(contents, extra_instruction: str | None = None):
-    request_contents = list(contents)
+        result.append({
+            "role": "assistant" if item["role"] == "assistant" else "user",
+            "content": item["content"],
+        })
     if extra_instruction:
-        request_contents.append(
-            types.Content(
-                role="user",
-                parts=[types.Part(text=extra_instruction)],
-            )
-        )
+        result.append({"role": "user", "content": extra_instruction})
+    return result
 
-    return await asyncio.to_thread(
-        gemini.models.generate_content,
-        model=GEMINI_MODEL,
-        contents=request_contents,
-        config=types.GenerateContentConfig(
-            system_instruction=TOKEN_PERSONALITY,
-            max_output_tokens=800,
-            thinking_config=types.ThinkingConfig(thinking_level="low"),
-        ),
+
+async def ask_groq(history, extra_instruction=None):
+    return await groq.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=build_groq_messages(history, extra_instruction),
+        reasoning_effort="low",
+        max_completion_tokens=1200,
+        temperature=0.85,
     )
 
 
-def is_daily_quota_error(exc: Exception) -> bool:
+def is_quota_error(exc: Exception) -> bool:
     text = str(exc).lower()
-    return (
-        "resource_exhausted" in text
-        and "generaterequestsperdayperproject-freetier" in text
-    ) or "generate_content_free_tier_requests" in text
+    return any(term in text for term in (
+        "rate limit", "rate_limit", "too many requests", "429",
+        "quota", "tokens per minute", "requests per day",
+    ))
 
 
 def mark_quota_notice(channel_id: int) -> bool:
@@ -314,12 +297,10 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
     history = conversation_history[channel_id]
     history.append({"role": "user", "content": f"{username}: {user_text}"})
 
-    if gemini is None:
+    if groq is None:
         reply = fallback_message()
         history.append({"role": "assistant", "content": reply})
         return reply
-
-    contents = build_contents(history)
 
     previous_reply = next(
         (item["content"] for item in reversed(history) if item["role"] == "assistant"),
@@ -337,22 +318,22 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
             )
 
         try:
-            response = await ask_gemini(contents, retry_instruction)
-            reply = (response.text or "").strip()
+            response = await ask_groq(history, retry_instruction)
+            reply = (response.choices[0].message.content or "").strip()
 
             if looks_like_bad_reply(reply, previous_reply):
-                print(f"Gemini reply rejected on attempt {attempt + 1}/2")
+                print(f"Groq reply rejected on attempt {attempt + 1}/2")
                 if attempt == 0:
                     await asyncio.sleep(0.35)
                     continue
-                raise RuntimeError("Gemini returned an unusable response after retry")
+                raise RuntimeError("Groq returned an unusable response after retry")
 
             history.append({"role": "assistant", "content": reply})
             return reply
 
         except Exception as exc:
-            if is_daily_quota_error(exc):
-                print("Gemini daily free-tier quota exhausted; using local fallback without retry.")
+            if is_quota_error(exc):
+                print("Groq free-tier/rate quota reached; using local fallback without retry.")
                 if mark_quota_notice(channel_id):
                     reply = random.choice(QUOTA_MESSAGES)
                 else:
@@ -360,7 +341,7 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
                 history.append({"role": "assistant", "content": reply})
                 return reply
 
-            print(f"Gemini error on attempt {attempt + 1}/2: {exc}")
+            print(f"Groq error on attempt {attempt + 1}/2: {exc}")
             if attempt == 0:
                 await asyncio.sleep(0.6)
 
@@ -457,9 +438,9 @@ async def on_ready() -> None:
     print("=" * 46)
     print(f"Account: {bot.user}")
     print(f"Guilds: {len(bot.guilds)}")
-    print(f"AI: {'ONLINE' if gemini else 'OFFLINE (local fallback)'}")
-    print(f"Model: {GEMINI_MODEL if gemini else 'local'}")
-    print("Provider: Gemini")
+    print(f"AI: {'ONLINE' if groq else 'OFFLINE (local fallback)'}")
+    print(f"Model: {GROQ_MODEL if groq else 'local'}")
+    print("Provider: Groq")
     print("Ears: ONLINE")
     print("Paws: ONLINE")
     print("Chaos: MAXIMUM")

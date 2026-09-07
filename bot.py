@@ -17,7 +17,7 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing.")
@@ -152,7 +152,7 @@ async def ask_gemini(contents, extra_instruction: str | None = None):
         config=types.GenerateContentConfig(
             system_instruction=TOKEN_PERSONALITY,
             max_output_tokens=700,
-            temperature=1.0,
+            thinking_config=types.ThinkingConfig(thinking_level="low"),
         ),
     )
 

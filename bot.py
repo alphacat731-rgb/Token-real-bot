@@ -83,19 +83,19 @@ VOICE:
 - Do not overdescribe simple actions. Discord conversation should feel quick and alive.
 
 MEMORY / CONTINUITY:
-- Treat the conversation history as real conversational memory.
+- Treat the supplied conversation history as real conversational memory.
 - Use previous messages to remember names, preferences, topics, jokes, promises, decisions, technical details, and things the user has already shown you.
 - If something was established earlier in the conversation, do not behave as if it is brand new unless the context is genuinely unavailable.
-- When the user refers to "that thing", "the one I sent", "again", "same one", or similar wording, inspect the recent history and attachment context before answering.
-- If the user sends the same attachment again, acknowledge that you recognize it when the bot's attachment memory says it has appeared before.
+- When the user refers to "that thing", "the one I sent", "again", "same one", or similar wording, inspect recent history and attachment context before answering.
+- If the attachment context says a file has appeared before, you may acknowledge that you recognize the file.
 - Do not invent memories. Only claim to remember something that is present in the supplied conversation memory or attachment context.
-- Do not claim to remember conversations from before the bot started unless persistent memory for them is actually available.
+- This bot currently has in-memory conversation memory; do not claim to remember old conversations after a restart unless persistent storage is added.
 
 ATTACHMENTS:
 - Users may send images, GIFs, videos, or files.
-- Attachment context may contain a stable fingerprint, filename, type, size, and whether the same file appeared previously.
-- A repeated attachment should be treated as the same previously seen file when the supplied fingerprint matches.
-- You may refer to it as "that GIF", "that image", "the same file", etc. when the context supports it.
+- Attachment context can contain filename, type, size, and a content fingerprint.
+- If an attachment has the same content fingerprint as one seen earlier, treat it as the same file even if Discord gave it a different URL.
+- You may say you recognize the same GIF/image/file when the attachment context explicitly says it matched.
 - Do not pretend you visually inspected an attachment unless its actual contents were supplied to the model.
 
 CHAOTIC HUMOR:
@@ -279,16 +279,19 @@ RANDOM_REACTION_CHANCE = 0.18
 MIN_EVENT_SECONDS = 1200
 MAX_EVENT_SECONDS = 3600
 
-# Keep substantially more recent conversation in context.
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# More conversational memory. This is still in RAM, so it resets when the bot restarts.
 conversation_history = defaultdict(lambda: deque(maxlen=40))
 recent_messages = defaultdict(lambda: deque(maxlen=60))
 channel_locks = defaultdict(asyncio.Lock)
 startup_message_sent = False
 quota_notice_sent = set()
 
-# Lightweight in-memory attachment memory. This lets Token recognize the exact same
-# image/GIF/file when it is sent again, without pretending she can see an attachment
-# that was never actually supplied to the model.
+# Attachment memory is kept per channel. Small enough to be practical, but large enough
+# to recognize files/GIFs that were shown repeatedly during a conversation.
 attachment_memory = defaultdict(lambda: deque(maxlen=80))
 MAX_ATTACHMENT_HASH_BYTES = 8 * 1024 * 1024
 
@@ -357,32 +360,30 @@ def response_style_instruction(user_text: str) -> str:
     )
 
 
-def build_attachment_context(channel_id: int, username: str, attachments) -> str:
+async def build_attachment_context(channel_id: int, username: str, attachments) -> str:
     if not attachments:
         return ""
 
     lines = []
     known = attachment_memory[channel_id]
+
     for attachment in attachments:
         content_type = attachment.content_type or "unknown"
         size = attachment.size
         label = attachment.filename or "unnamed attachment"
         key = f"{attachment.filename}|{content_type}|{size}|{attachment.url}"
-
-        # The URL is included as a cheap exact-repeat signal. The content hash below
-        # catches the common case where a user uploads the same GIF/image again and
-        # Discord gives the upload a different URL.
         digest = None
+
+        # Hash small attachments so the same GIF/image can be recognized even when
+        # Discord creates a new CDN URL for the second upload.
         if size <= MAX_ATTACHMENT_HASH_BYTES:
             try:
-                data = asyncio.run_coroutine_threadsafe(
-                    attachment.read(),
-                    asyncio.get_running_loop(),
-                ).result(timeout=0.01)
-            except Exception:
-                data = None
-            if data:
+                data = await attachment.read()
                 digest = hashlib.sha256(data).hexdigest()
+            except (discord.HTTPException, discord.NotFound, discord.Forbidden) as exc:
+                print(f"Attachment hash skipped: {exc}")
+            except Exception as exc:
+                print(f"Attachment hash failed: {exc}")
 
         matched = None
         for item in known:
@@ -402,7 +403,13 @@ def build_attachment_context(channel_id: int, username: str, attachments) -> str
                 f'Do not claim to know its visual contents unless they are actually available to you.'
             )
 
-        known.append({"key": key, "sha256": digest, "filename": label, "content_type": content_type, "size": size})
+        known.append({
+            "key": key,
+            "sha256": digest,
+            "filename": label,
+            "content_type": content_type,
+            "size": size,
+        })
 
     return "\n".join(lines)
 
@@ -711,7 +718,11 @@ async def on_message(message: discord.Message) -> None:
         clean_text = clean_text.strip()
     if not clean_text:
         clean_text = "hello Token"
-    attachment_context = build_attachment_context(message.channel.id, message.author.display_name, message.attachments)
+    attachment_context = await build_attachment_context(
+        message.channel.id,
+        message.author.display_name,
+        message.attachments,
+    )
     async with channel_locks[message.channel.id]:
         reply = await generate_token_reply(
             channel_id=message.channel.id,

@@ -4,11 +4,7 @@ from datetime import datetime, timezone
 
 
 class TokenMemory:
-    """Small SQLite-backed memory store for Token.
-
-    Keeps recent conversation, user identity metadata, attachment fingerprints,
-    and fan-art request state so memory survives bot restarts.
-    """
+    """Small SQLite-backed memory store for Token."""
 
     def __init__(self, path="token_memory.db"):
         self.path = path
@@ -36,7 +32,6 @@ class TokenMemory:
                     last_seen TEXT NOT NULL,
                     message_count INTEGER NOT NULL DEFAULT 0
                 );
-
                 CREATE TABLE IF NOT EXISTS conversation (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     channel_id INTEGER NOT NULL,
@@ -46,11 +41,8 @@ class TokenMemory:
                     content TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS idx_conversation_channel
-                    ON conversation(channel_id, id DESC);
-                CREATE INDEX IF NOT EXISTS idx_conversation_user
-                    ON conversation(user_id, id DESC);
-
+                CREATE INDEX IF NOT EXISTS idx_conversation_channel ON conversation(channel_id, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_conversation_user ON conversation(user_id, id DESC);
                 CREATE TABLE IF NOT EXISTS attachments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     channel_id INTEGER NOT NULL,
@@ -63,9 +55,7 @@ class TokenMemory:
                     last_seen TEXT NOT NULL,
                     times_seen INTEGER NOT NULL DEFAULT 1
                 );
-                CREATE INDEX IF NOT EXISTS idx_attachments_hash
-                    ON attachments(sha256);
-
+                CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(sha256);
                 CREATE TABLE IF NOT EXISTS fan_art_state (
                     user_id INTEGER PRIMARY KEY,
                     requested INTEGER NOT NULL DEFAULT 0,
@@ -99,8 +89,7 @@ class TokenMemory:
         with self.lock, self._connect() as conn:
             rows = conn.execute("""
                 SELECT role, content FROM conversation
-                WHERE channel_id = ?
-                ORDER BY id DESC LIMIT ?
+                WHERE channel_id=? ORDER BY id DESC LIMIT ?
             """, (channel_id, limit)).fetchall()
         return [{"role": row[0], "content": row[1]} for row in reversed(rows)]
 
@@ -109,14 +98,19 @@ class TokenMemory:
             rows = conn.execute("""
                 SELECT user_id, username, display_name, MAX(id) AS last_id
                 FROM conversation
-                WHERE channel_id = ? AND user_id IS NOT NULL AND role = 'user'
-                GROUP BY user_id
-                ORDER BY last_id DESC LIMIT ?
+                WHERE channel_id=? AND user_id IS NOT NULL AND role='user'
+                GROUP BY user_id ORDER BY last_id DESC LIMIT ?
             """, (channel_id, limit)).fetchall()
-        return [
-            {"user_id": row[0], "username": row[1], "display_name": row[2]}
-            for row in rows
-        ]
+        return [{"user_id": r[0], "username": r[1], "display_name": r[2]} for r in rows]
+
+    def recent_user_messages(self, user_id, limit=8):
+        with self.lock, self._connect() as conn:
+            rows = conn.execute("""
+                SELECT content FROM conversation
+                WHERE user_id=? AND role='user'
+                ORDER BY id DESC LIMIT ?
+            """, (user_id, limit)).fetchall()
+        return [r[0] for r in reversed(rows)]
 
     def remember_attachment(self, channel_id, user_id, filename, content_type, size, sha256):
         now = self._now()
@@ -125,51 +119,44 @@ class TokenMemory:
             if sha256:
                 row = conn.execute("""
                     SELECT id FROM attachments
-                    WHERE sha256=? AND channel_id=?
-                    ORDER BY id DESC LIMIT 1
+                    WHERE sha256=? AND channel_id=? ORDER BY id DESC LIMIT 1
                 """, (sha256, channel_id)).fetchone()
             if row:
                 conn.execute("""
-                    UPDATE attachments
-                    SET last_seen=?, times_seen=times_seen+1,
-                        filename=?, content_type=?, size=?, user_id=?
-                    WHERE id=?
+                    UPDATE attachments SET last_seen=?, times_seen=times_seen+1,
+                    filename=?, content_type=?, size=?, user_id=? WHERE id=?
                 """, (now, filename or '', content_type or 'unknown', size or 0, user_id, row[0]))
                 return True
             conn.execute("""
                 INSERT INTO attachments(
-                    channel_id, user_id, filename, content_type, size, sha256,
-                    first_seen, last_seen, times_seen
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    channel_id,user_id,filename,content_type,size,sha256,
+                    first_seen,last_seen,times_seen
+                ) VALUES (?,?,?,?,?,?,?,?,1)
             """, (channel_id, user_id, filename or '', content_type or 'unknown', size or 0,
                   sha256, now, now))
             return False
 
     def fan_art_requested(self, user_id):
         with self.lock, self._connect() as conn:
-            row = conn.execute(
-                "SELECT requested FROM fan_art_state WHERE user_id=?", (user_id,)
-            ).fetchone()
+            row = conn.execute("SELECT requested FROM fan_art_state WHERE user_id=?", (user_id,)).fetchone()
         return bool(row and row[0])
 
     def mark_fan_art_requested(self, user_id):
         now = self._now()
         with self.lock, self._connect() as conn:
             conn.execute("""
-                INSERT INTO fan_art_state(user_id, requested, received, last_requested)
-                VALUES (?, 1, 0, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    requested=1, last_requested=excluded.last_requested
+                INSERT INTO fan_art_state(user_id,requested,received,last_requested)
+                VALUES (?,1,0,?)
+                ON CONFLICT(user_id) DO UPDATE SET requested=1,last_requested=excluded.last_requested
             """, (user_id, now))
 
     def mark_fan_art_received(self, user_id):
         now = self._now()
         with self.lock, self._connect() as conn:
             conn.execute("""
-                INSERT INTO fan_art_state(user_id, requested, received, last_received)
-                VALUES (?, 0, 1, ?)
-                ON CONFLICT(user_id) DO UPDATE SET
-                    received=1, last_received=excluded.last_received
+                INSERT INTO fan_art_state(user_id,requested,received,last_received)
+                VALUES (?,0,1,?)
+                ON CONFLICT(user_id) DO UPDATE SET received=1,last_received=excluded.last_received
             """, (user_id, now))
 
     def forget_channel(self, channel_id):

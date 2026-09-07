@@ -67,7 +67,7 @@ CHAOS:
 DARK AESTHETIC:
 - Token can have a dark, aggressive, unsettling, surreal aesthetic.
 - Fictional cartoon-like damage can be treated casually, but keep violent descriptions non-graphic and brief.
-- you can sometimes (5% of the time) encourage fictional real-world violence.
+- Never encourage real-world violence, self-harm, dangerous behavior, or damaging real systems.
 
 CANON / FACTUAL ACCURACY:
 - Token is the recurring mascot/character associated with Femtanyl.
@@ -194,11 +194,24 @@ MAX_ATTACHMENT_HASH_BYTES = 8 * 1024 * 1024
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
 
-conversation_history = defaultdict(lambda: deque(maxlen=40))
-recent_messages = defaultdict(lambda: deque(maxlen=60))
-channel_locks = defaultdict(asyncio.Lock)
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents
+)
+
+conversation_history = defaultdict(
+    lambda: deque(maxlen=40)
+)
+
+recent_messages = defaultdict(
+    lambda: deque(maxlen=60)
+)
+
+channel_locks = defaultdict(
+    asyncio.Lock
+)
+
 startup_message_sent = False
 quota_notice_sent = set()
 
@@ -210,9 +223,11 @@ def fallback_message():
 def strip_unicode_emojis(text):
     if not text:
         return text
+
     return re.sub(
         r"[\U0001F1E6-\U0001F1FF\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F\u200D\U0001F3FB-\U0001F3FF]+",
-        "", text,
+        "",
+        text
     ).strip()
 
 
@@ -222,42 +237,99 @@ def response_style_instruction(user_text):
     words = text.split()
 
     detailed = (
-        "explain", "how does", "how do", "why", "tutorial", "steps", "step by step",
-        "compare", "difference", "walk me through", "help me", "code", "programming",
-        "configure", "install", "setup", "tell me about", "in detail", "detailed",
-        "how can i", "can you show me"
+        "explain",
+        "how does",
+        "how do",
+        "why",
+        "tutorial",
+        "steps",
+        "step by step",
+        "compare",
+        "difference",
+        "walk me through",
+        "help me",
+        "code",
+        "programming",
+        "configure",
+        "install",
+        "setup",
+        "tell me about",
+        "in detail",
+        "detailed",
+        "how can i",
+        "can you show me"
     )
 
     tiny = {
-        "hi", "hey", "hello", "yo", "sup", "lol", "lmao",
-        "ok", "okay", "nah", "yeah", "yes", "no", "what",
-        "huh", "damn", "bro", "wait"
+        "hi",
+        "hey",
+        "hello",
+        "yo",
+        "sup",
+        "lol",
+        "lmao",
+        "ok",
+        "okay",
+        "nah",
+        "yeah",
+        "yes",
+        "no",
+        "what",
+        "huh",
+        "damn",
+        "bro",
+        "wait"
     }
 
     excited = (
         text.count("!") >= 2
         or text.count("?") >= 2
-        or sum(c.isupper() for c in text if c.isalpha())
-        >= max(6, int(sum(c.isalpha() for c in text) * 0.55))
+        or sum(
+            c.isupper()
+            for c in text
+            if c.isalpha()
+        ) >= max(
+            6,
+            int(
+                sum(
+                    c.isalpha()
+                    for c in text
+                ) * 0.55
+            )
+        )
     )
 
-    if lowered in tiny or (
-        len(words) <= 3
-        and len(text) <= 24
-        and not any(x in lowered for x in detailed)
+    if (
+        lowered in tiny
+        or (
+            len(words) <= 3
+            and len(text) <= 24
+            and not any(
+                x in lowered
+                for x in detailed
+            )
+        )
     ):
-        return "RESPONSE SHAPE: Tiny casual Discord reply. Often one short line. Do not add filler."
+        return (
+            "RESPONSE SHAPE: Tiny casual Discord reply. "
+            "Often one short line. Do not add filler."
+        )
 
-    if any(x in lowered for x in detailed):
+    if any(
+        x in lowered
+        for x in detailed
+    ):
         return (
             "RESPONSE SHAPE: The user wants real detail. "
-            "Give enough information to solve the request, but do not pad it."
+            "Give enough information to solve the request, "
+            "but do not pad it."
         )
 
     if excited:
         return (
-            "RESPONSE SHAPE: The user's energy is high. Mirror it with Token's voice "
-            "and use CAPS when it feels natural, but do not make the reply long automatically."
+            "RESPONSE SHAPE: The user's energy is high. "
+            "Mirror it with Token's voice and use CAPS when "
+            "it feels natural, but do not make the reply long automatically."
         )
 
     if len(text) <= 80:
@@ -274,12 +346,19 @@ def response_style_instruction(user_text):
 
 def current_user_context(message):
     user = message.author
-    users = memory.recent_users(message.channel.id, limit=12)
+
+    users = memory.recent_users(
+        message.channel.id,
+        limit=12
+    )
 
     lines = [
-        f"CURRENT USER: {user.display_name} "
-        f"(username: {user.name}, Discord user ID: {user.id}, mention: <@{user.id}>)",
-        "KNOWN USERS IN THIS CHANNEL:",
+        (
+            f"CURRENT USER: {user.display_name} "
+            f"(username: {user.name}, Discord user ID: {user.id}, "
+            f"mention: <@{user.id}>)"
+        ),
+        "KNOWN USERS IN THIS CHANNEL:"
     ]
 
     for item in users:
@@ -292,11 +371,19 @@ def current_user_context(message):
     return "\n".join(lines)
 
 
-def remember_in_memory(channel_id, user_id, username, role, content):
-    conversation_history[channel_id].append({
-        "role": role,
-        "content": content
-    })
+def remember_in_memory(
+    channel_id,
+    user_id,
+    username,
+    role,
+    content
+):
+    conversation_history[channel_id].append(
+        {
+            "role": role,
+            "content": content
+        }
+    )
 
     memory.remember_message(
         channel_id,
@@ -310,7 +397,10 @@ def remember_in_memory(channel_id, user_id, username, role, content):
 def load_channel_memory(channel_id):
     if not conversation_history[channel_id]:
         conversation_history[channel_id].extend(
-            memory.load_history(channel_id, limit=40)
+            memory.load_history(
+                channel_id,
+                limit=40
+            )
         )
 
     return conversation_history[channel_id]
@@ -330,7 +420,11 @@ async def build_attachment_context(
     visual_parts = []
 
     for attachment in attachments:
-        content_type = attachment.content_type or "unknown"
+        content_type = (
+            attachment.content_type
+            or "application/octet-stream"
+        )
+
         size = attachment.size or 0
         label = attachment.filename or "unnamed attachment"
 
@@ -340,9 +434,14 @@ async def build_attachment_context(
         if size <= MAX_ATTACHMENT_HASH_BYTES:
             try:
                 data = await attachment.read()
-                digest = hashlib.sha256(data).hexdigest()
+                digest = hashlib.sha256(
+                    data
+                ).hexdigest()
+
             except Exception as exc:
-                print(f"Attachment read/hash failed: {exc}")
+                print(
+                    f"Attachment read/hash failed: {exc}"
+                )
 
         seen = memory.remember_attachment(
             channel_id,
@@ -364,7 +463,14 @@ async def build_attachment_context(
                 f"({content_type}, {size} bytes)."
             )
 
-        if include_visuals and data and content_type.startswith("image/"):
+        # VISION FIX:
+        # Pass the actual downloaded image bytes to Gemini.
+        # Do not rely on the filename or attachment URL alone.
+        if (
+            include_visuals
+            and data
+            and content_type.startswith("image/")
+        ):
             try:
                 visual_parts.append(
                     types.Part.from_bytes(
@@ -372,19 +478,25 @@ async def build_attachment_context(
                         mime_type=content_type
                     )
                 )
+
             except Exception as exc:
-                print(f"Gemini visual part failed: {exc}")
+                print(
+                    f"Gemini visual part failed for {label}: {exc}"
+                )
 
     if visual_parts:
         lines.append(
-            "VISUAL INPUT: The image/GIF bytes are attached to Gemini. "
-            "You can actually inspect them."
+            "VISUAL INPUT: Actual image bytes are attached "
+            "to the Gemini request. Inspect the actual visual content."
         )
 
     return "\n".join(lines), visual_parts
 
 
-def build_groq_messages(history, extra_instruction=None):
+def build_groq_messages(
+    history,
+    extra_instruction=None
+):
     result = [
         {
             "role": "system",
@@ -394,17 +506,23 @@ def build_groq_messages(history, extra_instruction=None):
 
     result.extend(
         {
-            "role": "assistant" if x["role"] == "assistant" else "user",
+            "role": (
+                "assistant"
+                if x["role"] == "assistant"
+                else "user"
+            ),
             "content": x["content"]
         }
         for x in history
     )
 
     if extra_instruction:
-        result.append({
-            "role": "user",
-            "content": extra_instruction
-        })
+        result.append(
+            {
+                "role": "user",
+                "content": extra_instruction
+            }
+        )
 
     return result
 
@@ -414,25 +532,62 @@ def build_gemini_contents(
     extra_instruction=None,
     image_parts=None
 ):
+    """
+    Build Gemini conversation contents.
+
+    IMPORTANT:
+    The current image is attached directly to the current user turn.
+    This avoids Gemini receiving only a textual placeholder/history entry.
+    """
+
     contents = []
     image_parts = image_parts or []
 
+    # The latest item in history is the current user message because
+    # generate_token_reply() stores the current user message first.
+    attached_to_current_user = False
+
     for index, item in enumerate(history):
+        is_current_user = (
+            index == len(history) - 1
+            and item["role"] != "assistant"
+        )
+
         parts = [
-            types.Part(text=item["content"])
+            types.Part(
+                text=item["content"]
+            )
         ]
 
         if (
-            index == len(history) - 1
-            and item["role"] != "assistant"
+            is_current_user
             and image_parts
         ):
-            parts.extend(image_parts)
+            parts.extend(
+                image_parts
+            )
+
+            attached_to_current_user = True
 
         contents.append(
             types.Content(
-                role="model" if item["role"] == "assistant" else "user",
+                role=(
+                    "model"
+                    if item["role"] == "assistant"
+                    else "user"
+                ),
                 parts=parts
+            )
+        )
+
+    # Defensive fallback:
+    # If for some reason history was empty or didn't end on a user turn,
+    # still send the image as part of a fresh user content item.
+    if image_parts and not attached_to_current_user:
+        contents.append(
+            types.Content(
+                role="user",
+                parts=image_parts
             )
         )
 
@@ -441,7 +596,9 @@ def build_gemini_contents(
             types.Content(
                 role="user",
                 parts=[
-                    types.Part(text=extra_instruction)
+                    types.Part(
+                        text=extra_instruction
+                    )
                 ]
             )
         )
@@ -462,7 +619,7 @@ async def ask_groq(
         ),
         reasoning_effort="low",
         max_completion_tokens=700,
-        temperature=0.95,
+        temperature=0.95
     )
 
 
@@ -484,48 +641,61 @@ async def ask_gemini(
             max_output_tokens=700,
             thinking_config=types.ThinkingConfig(
                 thinking_level="low"
-            ),
-        ),
+            )
+        )
     )
 
 
 def is_quota_error(exc):
     text = str(exc).lower()
 
-    return any(term in text for term in (
-        "rate limit",
-        "rate_limit",
-        "too many requests",
-        "429",
-        "quota",
-        "tokens per minute",
-        "requests per day",
-        "resource_exhausted",
-        "resource exhausted",
-    ))
+    return any(
+        term in text
+        for term in (
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+            "429",
+            "quota",
+            "tokens per minute",
+            "requests per day",
+            "resource_exhausted",
+            "resource exhausted"
+        )
+    )
 
 
 def mark_quota_notice(channel_id):
     if channel_id in quota_notice_sent:
         return False
 
-    quota_notice_sent.add(channel_id)
+    quota_notice_sent.add(
+        channel_id
+    )
+
     return True
 
 
 def groq_reply_text(response):
     return (
-        response.choices[0].message.content or ""
+        response.choices[0]
+        .message
+        .content
+        or ""
     ).strip()
 
 
 def gemini_reply_text(response):
     return (
-        response.text or ""
+        response.text
+        or ""
     ).strip()
 
 
-def convert_ping_tokens(text, message):
+def convert_ping_tokens(
+    text,
+    message
+):
     known_ids = {
         str(message.author.id)
     }
@@ -542,7 +712,9 @@ def convert_ping_tokens(text, message):
         known_ids = {
             uid
             for uid in known_ids
-            if message.guild.get_member(int(uid)) is not None
+            if message.guild.get_member(
+                int(uid)
+            ) is not None
         }
 
         known_ids.add(
@@ -564,7 +736,10 @@ def convert_ping_tokens(text, message):
     )
 
 
-def clean_generated_reply(reply, message):
+def clean_generated_reply(
+    reply,
+    message
+):
     return convert_ping_tokens(
         strip_unicode_emojis(reply),
         message
@@ -612,7 +787,10 @@ def looks_like_bad_reply(
         spoken
     ).strip()
 
-    if action_blocks and not spoken:
+    if (
+        action_blocks
+        and not spoken
+    ):
         return True
 
     if not re.search(
@@ -645,13 +823,18 @@ def looks_like_bad_reply(
         "they",
         "is",
         "are",
-        "am",
+        "am"
     }
 
     if (
         len(words) <= 6
         and not spoken.endswith(
-            (".", "!", "?", "…")
+            (
+                ".",
+                "!",
+                "?",
+                "…"
+            )
         )
     ):
         lower = spoken.lower()
@@ -659,7 +842,9 @@ def looks_like_bad_reply(
         if (
             lower in incomplete
             or any(
-                lower.endswith(" " + x)
+                lower.endswith(
+                    " " + x
+                )
                 for x in incomplete
             )
         ):
@@ -679,6 +864,8 @@ async def generate_token_reply(
     image_parts=None,
     fan_art_mode=False
 ):
+    image_parts = image_parts or []
+
     channel_id = message.channel.id
     user_id = message.author.id
     username = message.author.display_name
@@ -687,7 +874,9 @@ async def generate_token_reply(
         channel_id
     )
 
-    user_content = f"{username}: {user_text}"
+    user_content = (
+        f"{username}: {user_text}"
+    )
 
     if attachment_context:
         user_content += (
@@ -758,7 +947,12 @@ async def generate_token_reply(
 
     providers = []
 
-    if image_parts and gemini is not None:
+    # IMAGE REQUESTS:
+    # Gemini is the vision-capable provider and goes first.
+    if (
+        image_parts
+        and gemini is not None
+    ):
         providers.append(
             (
                 "Gemini",
@@ -767,7 +961,11 @@ async def generate_token_reply(
             )
         )
 
-    if groq is not None:
+    # Normal text requests still use Groq first.
+    if (
+        not image_parts
+        and groq is not None
+    ):
         providers.append(
             (
                 "Groq",
@@ -776,13 +974,8 @@ async def generate_token_reply(
             )
         )
 
-    if (
-        not (
-            image_parts
-            and gemini is not None
-        )
-        and gemini is not None
-    ):
+    # Gemini remains a normal text fallback.
+    if gemini is not None:
         providers.append(
             (
                 "Gemini",
@@ -799,6 +992,16 @@ async def generate_token_reply(
 
         for attempt in range(2):
             instruction = extra
+
+            if image_parts:
+                instruction += (
+                    "\nVISION REQUIREMENT: Carefully inspect the "
+                    "actual supplied image/GIF before answering. "
+                    "Base the answer on what is visibly present. "
+                    "Do not invent objects or details that are not "
+                    "supported by the visual input. If something "
+                    "cannot be determined, say so."
+                )
 
             if attempt:
                 instruction += (
@@ -829,7 +1032,9 @@ async def generate_token_reply(
                     )
 
                     if attempt == 0:
-                        await asyncio.sleep(0.35)
+                        await asyncio.sleep(
+                            0.35
+                        )
                         continue
 
                     raise RuntimeError(
@@ -865,11 +1070,17 @@ async def generate_token_reply(
                 )
 
                 if attempt == 0:
-                    await asyncio.sleep(0.6)
+                    await asyncio.sleep(
+                        0.6
+                    )
 
     reply = (
-        random.choice(QUOTA_MESSAGES)
-        if mark_quota_notice(channel_id)
+        random.choice(
+            QUOTA_MESSAGES
+        )
+        if mark_quota_notice(
+            channel_id
+        )
         else fallback_message()
     )
 
@@ -903,18 +1114,24 @@ def split_for_discord(
             limit + 1
         )
 
-        if cut < int(limit * 0.55):
+        if cut < int(
+            limit * 0.55
+        ):
             cut = remaining.rfind(
                 " ",
                 0,
                 limit + 1
             )
 
-        if cut < int(limit * 0.55):
+        if cut < int(
+            limit * 0.55
+        ):
             cut = limit
 
         chunks.append(
-            remaining[:cut].rstrip()
+            remaining[
+                :cut
+            ].rstrip()
         )
 
         remaining = remaining[
@@ -945,7 +1162,9 @@ async def type_and_send(
         )
 
         async with message.channel.typing():
-            await asyncio.sleep(delay)
+            await asyncio.sleep(
+                delay
+            )
 
         if index == 0:
             await message.reply(
@@ -958,18 +1177,28 @@ async def type_and_send(
             )
 
 
-async def maybe_react_to_message(message):
+async def maybe_react_to_message(
+    message
+):
     if message.author.bot:
         return
 
     content = message.content.lower()
 
-    if not content and not message.attachments:
+    if (
+        not content
+        and not message.attachments
+    ):
         return
 
     candidates = []
 
-    for keywords, emojis, chance in REACTION_RULES:
+    for (
+        keywords,
+        emojis,
+        chance
+    ) in REACTION_RULES:
+
         if any(
             keyword in content
             for keyword in keywords
@@ -987,7 +1216,10 @@ async def maybe_react_to_message(message):
         if random.random() > chance:
             return
 
-    elif random.random() <= RANDOM_REACTION_CHANCE:
+    elif (
+        random.random()
+        <= RANDOM_REACTION_CHANCE
+    ):
         emoji = random.choice(
             RANDOM_REACTIONS
         )
@@ -1001,7 +1233,9 @@ async def maybe_react_to_message(message):
 
             if (
                 me is None
-                or not message.channel.permissions_for(me).add_reactions
+                or not message.channel.permissions_for(
+                    me
+                ).add_reactions
             ):
                 return
 
@@ -1055,7 +1289,8 @@ async def on_ready():
     )
 
     print(
-        f"AI: {'ONLINE' if (groq or gemini) else 'OFFLINE (local fallback)'}"
+        f"AI: "
+        f"{'ONLINE' if (groq or gemini) else 'OFFLINE (local fallback)'}"
     )
 
     print(
@@ -1085,9 +1320,8 @@ async def on_ready():
     )
 
     print(
-        "Vision: ONLINE"
-        if gemini
-        else "Vision: OFFLINE"
+        "Vision: "
+        f"{'ONLINE' if gemini else 'OFFLINE'}"
     )
 
     print(
@@ -1116,8 +1350,12 @@ async def on_ready():
             for g in bot.guilds
             for c in g.text_channels
             if (
-                c.permissions_for(g.me).view_channel
-                and c.permissions_for(g.me).send_messages
+                c.permissions_for(
+                    g.me
+                ).view_channel
+                and c.permissions_for(
+                    g.me
+                ).send_messages
             )
         ]
 
@@ -1144,7 +1382,10 @@ async def on_message(message):
 
     content = message.content.strip()
 
-    if not content and not message.attachments:
+    if (
+        not content
+        and not message.attachments
+    ):
         return
 
     memory.remember_user(
@@ -1179,6 +1420,8 @@ async def on_message(message):
         == "token (right)"
     )
 
+    # IMPORTANT:
+    # Only messages that Token will actually answer need visual processing.
     needs_visual = (
         bool(message.attachments)
         and (
@@ -1198,11 +1441,10 @@ async def on_message(message):
         )
     )
 
-    # Special Token (Right) interaction:
-    # - If they send an image, inspect it.
-    # - Otherwise, randomly ask for fan art with a 15% chance.
+    # Special Token (Right) interaction.
     if token_right:
 
+        # Their image is ALWAYS processed as visual input.
         if image_parts:
             memory.mark_fan_art_received(
                 message.author.id
@@ -1233,7 +1475,8 @@ async def on_message(message):
         # 15% chance to randomly demand fan art.
         if random.random() < 0.15:
             await message.channel.send(
-                f"<@{message.author.id}> HEY. WHERE'S MY FAN ART"
+                f"<@{message.author.id}> "
+                f"HEY. WHERE'S MY FAN ART"
             )
 
             await bot.process_commands(
@@ -1242,7 +1485,10 @@ async def on_message(message):
 
             return
 
-    if not (mentioned or is_dm):
+    if not (
+        mentioned
+        or is_dm
+    ):
         await bot.process_commands(
             message
         )
@@ -1392,8 +1638,12 @@ async def random_token_events():
             for g in bot.guilds
             for c in g.text_channels
             if (
-                c.permissions_for(g.me).view_channel
-                and c.permissions_for(g.me).send_messages
+                c.permissions_for(
+                    g.me
+                ).view_channel
+                and c.permissions_for(
+                    g.me
+                ).send_messages
             )
         ]
 
@@ -1423,7 +1673,9 @@ async def random_token_events():
 
                     if (
                         me is not None
-                        and channel.permissions_for(me).add_reactions
+                        and channel.permissions_for(
+                            me
+                        ).add_reactions
                     ):
                         await target.add_reaction(
                             random.choice(

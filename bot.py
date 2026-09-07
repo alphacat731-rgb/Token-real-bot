@@ -180,11 +180,31 @@ RANDOM_TOKEN_EVENTS = [
     "the waveform looked funny again. i approve.",
 ]
 
+# Context-aware emoji reactions. Token reacts occasionally rather than to every message.
+REACTION_RULES = [
+    (("gummy shark", "gummyshark", "gummy sharks", "shark"), ["🦈", "🍬", "😳"], 0.75),
+    (("token", "femtanyl", "femta"), ["👀", "🐈", "🫵"], 0.45),
+    (("meow", "miau", "cat", "kitty"), ["🐈", "😺", "😼"], 0.55),
+    (("lol", "lmao", "lmfao", "funny", "😭", "💀"), ["😭", "💀", "😂"], 0.55),
+    (("wtf", "what the fuck", "bro what", "huh", "weird"), ["💀", "👁️", "😭"], 0.45),
+    (("music", "song", "breakcore", "bass", "beat", "track"), ["🎧", "🔊", "🔥"], 0.40),
+    (("computer", "pc", "code", "python", "linux", "raspberry", "server", "wifi", "wi-fi"), ["💻", "👀", "🐈"], 0.35),
+]
+
+RANDOM_REACTIONS = ["🐈", "👀", "💀", "😭", "😼", "✨", "🔊", "🫠", "‼️", "🦈"]
+
+# Small autonomous behavior: reactions to recent chat plus rare standalone events.
+AUTONOMOUS_ACTION_CHANCE = 0.55
+RANDOM_REACTION_CHANCE = 0.18
+MIN_EVENT_SECONDS = 1200
+MAX_EVENT_SECONDS = 3600
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 conversation_history = defaultdict(lambda: deque(maxlen=16))
+recent_messages = defaultdict(lambda: deque(maxlen=24))
 channel_locks = defaultdict(asyncio.Lock)
 startup_message_sent = False
 quota_notice_sent = set()
@@ -372,6 +392,42 @@ async def type_and_send(message: discord.Message, text: str) -> None:
             await message.channel.send(chunk)
 
 
+async def maybe_react_to_message(message: discord.Message) -> None:
+    """Give Token small, context-aware emoji reactions without spamming."""
+    if message.author.bot:
+        return
+
+    content = message.content.lower()
+    if not content and not message.attachments:
+        return
+
+    candidates = []
+    for keywords, emojis, chance in REACTION_RULES:
+        if any(keyword in content for keyword in keywords):
+            candidates.extend((emoji, chance) for emoji in emojis)
+
+    if candidates:
+        emoji, chance = random.choice(candidates)
+        if random.random() > chance:
+            return
+    else:
+        if random.random() > RANDOM_REACTION_CHANCE:
+            return
+        emoji = random.choice(RANDOM_REACTIONS)
+
+    try:
+        if message.guild is not None:
+            me = message.guild.me
+            if me is None:
+                return
+            permissions = message.channel.permissions_for(me)
+            if not permissions.add_reactions:
+                return
+        await message.add_reaction(emoji)
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException) as exc:
+        print(f"Token reaction skipped: {exc}")
+
+
 @bot.event
 async def setup_hook() -> None:
     try:
@@ -398,6 +454,8 @@ async def on_ready() -> None:
     print("Ears: ONLINE")
     print("Paws: ONLINE")
     print("Chaos: MAXIMUM")
+    print("Reactions: ONLINE")
+    print("Autonomous behavior: ONLINE")
     print("=" * 46)
 
     if not startup_message_sent:
@@ -423,8 +481,13 @@ async def on_message(message: discord.Message) -> None:
         return
 
     content = message.content.strip()
-    if not content:
+    if not content and not message.attachments:
         return
+
+    recent_messages[message.channel.id].append(message)
+
+    # Token can acknowledge ordinary messages even when she isn't going to speak.
+    await maybe_react_to_message(message)
 
     mentioned = bot.user is not None and bot.user in message.mentions
     is_dm = isinstance(message.channel, discord.DMChannel)
@@ -487,7 +550,7 @@ async def random_token_events() -> None:
     await bot.wait_until_ready()
 
     while not bot.is_closed():
-        await asyncio.sleep(random.randint(1200, 3600))
+        await asyncio.sleep(random.randint(MIN_EVENT_SECONDS, MAX_EVENT_SECONDS))
 
         eligible = []
         for guild in bot.guilds:
@@ -501,8 +564,23 @@ async def random_token_events() -> None:
 
         channel = random.choice(eligible)
         try:
+            # Most autonomous actions are tiny reactions to existing chat; occasional
+            # standalone messages keep Token from becoming a constant notification source.
+            recent = recent_messages.get(channel.id)
+            if recent and random.random() < AUTONOMOUS_ACTION_CHANCE:
+                target = random.choice(list(recent))
+                if target.author.bot:
+                    continue
+
+                emoji = random.choice(RANDOM_REACTIONS)
+                me = channel.guild.me
+                if me is not None and channel.permissions_for(me).add_reactions:
+                    await target.add_reaction(emoji)
+                    print(f"Autonomous Token action: reacted {emoji} in #{channel.name}")
+                    continue
+
             await channel.send(random.choice(RANDOM_TOKEN_EVENTS))
-        except discord.HTTPException as exc:
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException) as exc:
             print(f"Random Token event failed: {exc}")
 
 

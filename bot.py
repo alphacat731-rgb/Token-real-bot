@@ -52,12 +52,34 @@ IMPORTANT CONVERSATION RULES:
 - Keep the chaos fictional and harmless.
 """
 
+STARTUP_MESSAGES = [
+    "THE QUEEN HAS AWAKENED. THIS SERVER BELONGS TO ME NOW.",
+    "TOKEN ONLINE. OWNERSHIP OF THIS SERVER HAS BEEN CLAIMED.",
+    "GOOD MORNING. I HAVE SEIZED CONTROL OF THE SERVER.",
+    "THE CAT HAS CONNECTED. YOUR SERVER IS MINE.",
+    "I'M AWAKE. WHO GAVE ME ADMINISTRATOR PERMISSIONS??",
+    "TOKEN HAS RETURNED. PLEASE REMAIN CALM. I WILL NOT BE REMOVING THE WALLS. YET.",
+    "SERVER ACQUIRED. NOW WHERE ARE MY SNACKS?",
+    "I HAVE AWAKENED FROM MY DIGITAL NAP. THIS SERVER IS MINE NOW. MEOW.",
+]
+
+QUOTA_MESSAGES = [
+    "i'd respond to that but i'm too lazy to type right now. ask me again after the reset.",
+    "my brain is working but my paws refuse to type. i'm out of AI juice.",
+    "GEMINI IS TIRED. TOKEN IS ALSO TIRED. EVERYONE GO HOME.",
+    "too lazy to think right now. i'll be useful again after the reset.",
+    "my AI privileges have been revoked. i'm going to sit on the keyboard instead.",
+    "my brain has temporarily entered low-power cat mode. try me again after the reset.",
+]
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 conversation_history = defaultdict(lambda: deque(maxlen=16))
 channel_locks = defaultdict(asyncio.Lock)
+startup_message_sent = False
+quota_notice_sent = set()
 
 
 def fallback_message() -> str:
@@ -73,9 +95,11 @@ def looks_like_bad_reply(reply: str, previous_reply: str | None = None) -> bool:
     if cleaned in {"*", "**", "...", "…", "-", "_"}:
         return True
 
+    # Reject replies that are nothing but Markdown-style actions.
+    action_blocks = re.findall(r"\*([^*]+)\*", cleaned)
     spoken = re.sub(r"\*[^*]+\*", "", cleaned).strip()
     spoken = re.sub(r"[_~`]+", "", spoken).strip()
-    if not spoken:
+    if action_blocks and not spoken:
         return True
 
     if not re.search(r"[A-Za-z0-9À-ÿ]", spoken):
@@ -141,6 +165,13 @@ def is_daily_quota_error(exc: Exception) -> bool:
     ) or "generate_content_free_tier_requests" in text
 
 
+def mark_quota_notice(channel_id: int) -> bool:
+    if channel_id in quota_notice_sent:
+        return False
+    quota_notice_sent.add(channel_id)
+    return True
+
+
 async def generate_token_reply(channel_id: int, username: str, user_text: str) -> str:
     history = conversation_history[channel_id]
     history.append({"role": "user", "content": f"{username}: {user_text}"})
@@ -157,6 +188,7 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
         None,
     )
 
+    # One normal request. Only retry a genuinely bad response once.
     for attempt in range(2):
         retry_instruction = None
         if attempt == 1:
@@ -184,7 +216,12 @@ async def generate_token_reply(channel_id: int, username: str, user_text: str) -
         except Exception as exc:
             if is_daily_quota_error(exc):
                 print("Gemini daily free-tier quota exhausted; using local fallback without retry.")
-                break
+                if mark_quota_notice(channel_id):
+                    reply = random.choice(QUOTA_MESSAGES)
+                else:
+                    reply = fallback_message()
+                history.append({"role": "assistant", "content": reply})
+                return reply
 
             print(f"Gemini error on attempt {attempt + 1}/2: {exc}")
             if attempt == 0:
@@ -241,6 +278,8 @@ async def setup_hook() -> None:
 
 @bot.event
 async def on_ready() -> None:
+    global startup_message_sent
+
     print("=" * 46)
     print("TOKEN ONLINE")
     print("=" * 46)
@@ -253,6 +292,23 @@ async def on_ready() -> None:
     print("Paws: ONLINE")
     print("Chaos: MAXIMUM")
     print("=" * 46)
+
+    if not startup_message_sent:
+        startup_message_sent = True
+        # Announce the awakening in a random channel where Token can speak.
+        eligible = []
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                permissions = channel.permissions_for(guild.me)
+                if permissions.view_channel and permissions.send_messages:
+                    eligible.append(channel)
+
+        if eligible:
+            channel = random.choice(eligible)
+            try:
+                await channel.send(random.choice(STARTUP_MESSAGES))
+            except discord.HTTPException as exc:
+                print(f"Startup Token announcement failed: {exc}")
 
 
 @bot.event

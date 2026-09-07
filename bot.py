@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import random
 import re
@@ -63,16 +64,39 @@ ENERGY RULES:
 - Chaos must REACT to the conversation. Never use random nonsense to avoid answering the user.
 - Contrast matters. Token should not scream or act insane in every single message.
 
+CAPS / TEXTING ENERGY:
+- Use CAPS LOCK more often than a normal person when Token is excited, amused, shocked, impatient, dramatic, or emphasizing something.
+- CAPS should be a noticeable part of Token's voice, but do not uppercase every message or every sentence.
+- A normal message may contain one short CAPS phrase for emphasis.
+- High-energy messages may contain several CAPS phrases or even mostly CAPS.
+- Do not force CAPS into calm or serious conversations.
+- Vary between lowercase, mixed case, and uppercase so the voice feels spontaneous rather than mechanically generated.
+
 VOICE:
 - Speak like a real person on Discord.
 - Lowercase is common when calm.
-- CAPS LOCK is used when emotion spikes, not constantly.
 - Informal grammar, slang, abbreviations, swearing, messy typing, and abrupt wording are allowed.
 - Text emoticons such as :3, >:3, :P, >:( and similar can be used sparingly.
 - NEVER use Unicode emoji characters in written responses.
 - Discord reactions are separate and may still use emoji through the bot's reaction system.
 - Avoid polished prose, corporate phrasing, therapeutic language, and generic roleplay writing.
 - Do not overdescribe simple actions. Discord conversation should feel quick and alive.
+
+MEMORY / CONTINUITY:
+- Treat the conversation history as real conversational memory.
+- Use previous messages to remember names, preferences, topics, jokes, promises, decisions, technical details, and things the user has already shown you.
+- If something was established earlier in the conversation, do not behave as if it is brand new unless the context is genuinely unavailable.
+- When the user refers to "that thing", "the one I sent", "again", "same one", or similar wording, inspect the recent history and attachment context before answering.
+- If the user sends the same attachment again, acknowledge that you recognize it when the bot's attachment memory says it has appeared before.
+- Do not invent memories. Only claim to remember something that is present in the supplied conversation memory or attachment context.
+- Do not claim to remember conversations from before the bot started unless persistent memory for them is actually available.
+
+ATTACHMENTS:
+- Users may send images, GIFs, videos, or files.
+- Attachment context may contain a stable fingerprint, filename, type, size, and whether the same file appeared previously.
+- A repeated attachment should be treated as the same previously seen file when the supplied fingerprint matches.
+- You may refer to it as "that GIF", "that image", "the same file", etc. when the context supports it.
+- Do not pretend you visually inspected an attachment unless its actual contents were supplied to the model.
 
 CHAOTIC HUMOR:
 - Token likes absurd escalation, surreal observations, internet jokes, and treating ridiculous events as ordinary.
@@ -187,7 +211,6 @@ NO-EMOJI RULE:
 ANTI-REPETITION:
 - Do not repeat the same catchphrase, joke structure, server claim, or reaction constantly.
 - Do not make every message start with "TOKEN".
-- Do not use CAPS LOCK in every message.
 - Do not make every message contain an action, cat joke, dark joke, computer joke, or gummy shark.
 - Vary rhythm, wording, emotional intensity, and message length.
 
@@ -256,15 +279,18 @@ RANDOM_REACTION_CHANCE = 0.18
 MIN_EVENT_SECONDS = 1200
 MAX_EVENT_SECONDS = 3600
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-conversation_history = defaultdict(lambda: deque(maxlen=16))
-recent_messages = defaultdict(lambda: deque(maxlen=24))
+# Keep substantially more recent conversation in context.
+conversation_history = defaultdict(lambda: deque(maxlen=40))
+recent_messages = defaultdict(lambda: deque(maxlen=60))
 channel_locks = defaultdict(asyncio.Lock)
 startup_message_sent = False
 quota_notice_sent = set()
+
+# Lightweight in-memory attachment memory. This lets Token recognize the exact same
+# image/GIF/file when it is sent again, without pretending she can see an attachment
+# that was never actually supplied to the model.
+attachment_memory = defaultdict(lambda: deque(maxlen=80))
+MAX_ATTACHMENT_HASH_BYTES = 8 * 1024 * 1024
 
 
 def fallback_message() -> str:
@@ -329,6 +355,56 @@ def response_style_instruction(user_text: str) -> str:
         "RESPONSE SHAPE: Choose the natural length. Be concise for simple points and thorough for genuinely substantial ones. "
         "Do not pad the answer because output space is available."
     )
+
+
+def build_attachment_context(channel_id: int, username: str, attachments) -> str:
+    if not attachments:
+        return ""
+
+    lines = []
+    known = attachment_memory[channel_id]
+    for attachment in attachments:
+        content_type = attachment.content_type or "unknown"
+        size = attachment.size
+        label = attachment.filename or "unnamed attachment"
+        key = f"{attachment.filename}|{content_type}|{size}|{attachment.url}"
+
+        # The URL is included as a cheap exact-repeat signal. The content hash below
+        # catches the common case where a user uploads the same GIF/image again and
+        # Discord gives the upload a different URL.
+        digest = None
+        if size <= MAX_ATTACHMENT_HASH_BYTES:
+            try:
+                data = asyncio.run_coroutine_threadsafe(
+                    attachment.read(),
+                    asyncio.get_running_loop(),
+                ).result(timeout=0.01)
+            except Exception:
+                data = None
+            if data:
+                digest = hashlib.sha256(data).hexdigest()
+
+        matched = None
+        for item in known:
+            if key == item["key"] or (digest and digest == item.get("sha256")):
+                matched = item
+                break
+
+        if matched:
+            lines.append(
+                f'ATTACHMENT RECALL: {username} has sent this same {content_type} attachment before. '
+                f'Filename: {label}. You can acknowledge recognizing it, but do not claim to see its contents '
+                f'unless those contents are actually available to you.'
+            )
+        else:
+            lines.append(
+                f'NEW ATTACHMENT: {username} sent a {content_type} attachment named {label} ({size} bytes). '
+                f'Do not claim to know its visual contents unless they are actually available to you.'
+            )
+
+        known.append({"key": key, "sha256": digest, "filename": label, "content_type": content_type, "size": size})
+
+    return "\n".join(lines)
 
 
 def looks_like_bad_reply(reply: str, previous_reply: str | None = None) -> bool:
@@ -433,9 +509,12 @@ def gemini_reply_text(response) -> str:
     return (response.text or "").strip()
 
 
-async def generate_token_reply(channel_id: int, username: str, user_text: str) -> str:
+async def generate_token_reply(channel_id: int, username: str, user_text: str, attachment_context: str = "") -> str:
     history = conversation_history[channel_id]
-    history.append({"role": "user", "content": f"{username}: {user_text}"})
+    user_content = f"{username}: {user_text}"
+    if attachment_context:
+        user_content += f"\n[Attachment context]\n{attachment_context}"
+    history.append({"role": "user", "content": user_content})
 
     previous_reply = next(
         (item["content"] for item in reversed(history) if item["role"] == "assistant"),
@@ -590,6 +669,9 @@ async def on_ready() -> None:
     print("Chaos: MAXIMUM")
     print("Reactions: ONLINE")
     print("Autonomous behavior: ONLINE")
+    print("Memory: ENHANCED")
+    print("Attachment recall: ONLINE")
+    print("CAPS ENERGY: ELEVATED")
     print("=" * 46)
 
     if not startup_message_sent:
@@ -629,11 +711,13 @@ async def on_message(message: discord.Message) -> None:
         clean_text = clean_text.strip()
     if not clean_text:
         clean_text = "hello Token"
+    attachment_context = build_attachment_context(message.channel.id, message.author.display_name, message.attachments)
     async with channel_locks[message.channel.id]:
         reply = await generate_token_reply(
             channel_id=message.channel.id,
             username=message.author.display_name,
             user_text=clean_text,
+            attachment_context=attachment_context,
         )
         await type_and_send(message, reply)
     await bot.process_commands(message)
@@ -664,6 +748,7 @@ async def token_mood(interaction: discord.Interaction) -> None:
 async def token_forget(interaction: discord.Interaction) -> None:
     key = interaction.channel_id or interaction.user.id
     conversation_history[key].clear()
+    attachment_memory[key].clear()
     await interaction.response.send_message("memory flushed. meow.dll rebooted.")
 
 

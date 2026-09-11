@@ -6,3 +6,5 @@ __pycache__/
 .DS_Store
 token_memory.db
 token_memory.db-*
+clyde_memory.db
+clyde_memory.db-*

@@ -1,93 +1,78 @@
-# Token Real Bot 🐈
+# Clyde Discord Helper
 
-A hybrid Discord bot for a chaotic Token-style mascot.
+Clyde is a female Discord-native helper built from the Token bot project, but designed as a separate assistant rather than a Token character bot.
 
-## What it does
+## What Clyde does
 
-- Replies when Token is mentioned or receives a DM.
-- Uses the Gemini API for conversational replies when `GEMINI_API_KEY` is available.
-- Falls back to the local `messages.py` pool if the AI API is unavailable.
-- Keeps a small rolling conversation history per channel.
-- Shows a short typing indicator before replies.
-- Provides `/token`, `/token_mood`, and `/token_forget` slash commands.
-- Occasionally sends a random local Token message as an idle event.
+- Replies when mentioned or when she receives a DM.
+- Uses Groq GPT-OSS for normal conversation.
+- Uses Groq Qwen 3.6 27B for image understanding.
+- Falls back to Gemini when the primary provider is unavailable.
+- Keeps persistent SQLite conversation/user memory.
+- Understands basic server, channel, member, and role context.
+- Provides Discord-native slash commands for utilities, polls, moderation, announcements, avatars, server info, user info, and memory management.
+- Performs moderation actions only through Discord permission checks and role hierarchy.
 
-## Setup
+## Environment
 
-### 1. Create the Discord application
-
-Create a Discord application and add a bot user. Enable the **Message Content Intent** on the bot settings page, because Token needs access to message text when responding to mentions and DMs.
-
-Invite the bot to your server with permissions to view channels, send messages, and read message history.
-
-### 2. Get a Gemini API key
-
-Create a Gemini API key in Google AI Studio and keep it private. The bot uses the official `google-genai` Python SDK.
-
-The default model is `gemini-3.7-flash`. You can change it with `GEMINI_MODEL` without editing the code.
-
-### 3. Install dependencies
-
-```bash
-python -m venv .venv
-```
-
-Activate the virtual environment, then run:
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Configure secrets
-
-Copy `.env.example` to `.env` and fill in your real values:
+Copy `.env.example` to `.env` and set:
 
 ```env
-DISCORD_TOKEN=your_discord_bot_token
+DISCORD_TOKEN=your_clyde_discord_bot_token
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=openai/gpt-oss-120b
+GROQ_VISION_MODEL=qwen/qwen3.6-27b
 GEMINI_API_KEY=your_gemini_api_key
 GEMINI_MODEL=gemini-3.7-flash
+CLYDE_MEMORY_DB=clyde_memory.db
 ```
 
-Do not commit `.env` to GitHub.
+Never commit `.env`.
 
-### 5. Start Token
+## Install
 
 ```bash
-python bot.py
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
 ```
 
-You should see a startup message showing the bot account, guild count, and whether the Gemini backend is online.
+Run:
 
-## How the hybrid mode works
-
-Normal conversation trigger:
-
-```text
-@Token what are you doing?
-             ↓
-       Gemini Token reply
+```bash
+python3 clyde.py
 ```
 
-AI unavailable:
+## Discord permissions
 
-```text
-@Token what are you doing?
-             ↓
-     local random message
+Clyde needs the Message Content Intent for mention/DM conversation. Give her the normal permissions needed for the tools you intend to use. Moderation commands additionally require the corresponding Discord permission and respect Discord role hierarchy.
+
+## Vision
+
+Image requests use `qwen/qwen3.6-27b` through Groq first. GIFs are converted to a PNG first frame with Pillow so they can be handled consistently. Gemini is kept as the secondary vision provider.
+
+## Suggested 24/7 systemd service
+
+Use the virtual-environment Python directly from systemd instead of relying on an interactive `source .venv/bin/activate` shell.
+
+```ini
+[Unit]
+Description=Clyde Discord Helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_LINUX_USER
+WorkingDirectory=/home/YOUR_LINUX_USER/Clyde-bot
+ExecStart=/home/YOUR_LINUX_USER/Clyde-bot/.venv/bin/python /home/YOUR_LINUX_USER/Clyde-bot/clyde.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 ```
-
-Idle event:
-
-```text
-no one talks to Token for a while
-             ↓
-     random Token message
-```
-
-## Message library
-
-Put local fallback messages in `messages.py`. The bot imports the `messages` list and randomly selects from it when the Gemini backend is unavailable or when an idle event fires.
 
 ## Notes
 
-The bot is designed to be run as a long-lived process on a machine or hosting service. GitHub itself stores the source code; it is not the runtime host for a continuously connected Discord Gateway bot.
+GitHub stores the source; the Discord Gateway connection runs on your Raspberry Pi or another host. Clyde is intentionally separate from Token so the Token project can keep its own personality and runtime.
